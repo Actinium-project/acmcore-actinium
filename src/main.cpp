@@ -1801,6 +1801,15 @@ CAmount GetBlockSubsidy(int nHeight, const Consensus::Params& consensusParams)
         return 0;
 
     CAmount nSubsidy = 50 * COIN;
+    // After GPUSupport HF at block 55,000 there will be only 50 blocks with 50ACM reward.
+    // Afterwards we will give only 40ACM per block.
+    // At block 85,000 we switch back to 50ACM.
+    if (nHeight < consensusParams.ACMZawyLWMAHeight) {
+        if (nHeight >= consensusParams.GPUSupportHeight + 50) {
+            nSubsidy = 40 * COIN;
+        }
+    }
+
     // Subsidy is cut in half every 210,000 blocks which will occur approximately every 4 years.
     nSubsidy >>= halvings;
     return nSubsidy;
@@ -3828,10 +3837,13 @@ bool ContextualCheckBlockHeader(const CBlockHeader& block, CValidationState& sta
     }
 
     // Reject outdated version blocks when 95% (75% on testnet) of the network has upgraded:
-    for (int32_t version = 3; version < 5; ++version) // check for version 2, 3 and 4 upgrades
-        if (block.nVersion < version && IsSuperMajority(version, pindexPrev, consensusParams.nMajorityRejectBlockOutdated, consensusParams))
-            return state.Invalid(false, REJECT_OBSOLETE, strprintf("bad-version(0x%08x)", version - 1),
-                                 strprintf("rejected nVersion=0x%08x block", version - 1));
+    // check for version 2, 3 and 4 upgrades
+    if((block.nVersion < 2 && nHeight >= consensusParams.BIP34Height) ||
+       (block.nVersion < 3 && nHeight >= consensusParams.BIP66Height) ||
+       (block.nVersion < 4 && nHeight >= consensusParams.BIP65Height) ||
+	   (!(block.nVersion  & VERSIONBITS_FORK_GPU_SUPPORT) && nHeight >= consensusParams.GPUSupportHeight))
+            return state.Invalid(false, REJECT_OBSOLETE, strprintf("bad-version(0x%08x)", block.nVersion),
+                                 strprintf("rejected nVersion=0x%08x block", block.nVersion));
 
     // Reject outdated version blocks when 75% of the network (BIP9 rules) has upgraded:
     if (block.nVersion < VERSIONBITS_TOP_BITS && IsWitnessEnabled(pindexPrev, consensusParams))
@@ -3970,6 +3982,12 @@ static bool AcceptBlockHeader(const CBlockHeader& block, CValidationState& state
         if (mi == mapBlockIndex.end())
             return state.DoS(10, error("%s: prev block not found", __func__), 0, "bad-prevblk");
         pindexPrev = (*mi).second;
+
+        if  (!(block.nVersion & VERSIONBITS_FORK_GPU_SUPPORT) && pindexPrev->nHeight + 1 >= chainparams.GetConsensus().GPUSupportHeight) {
+        	state.Invalid(false, REJECT_OBSOLETE, strprintf("bad-version(0x%08x)", block.nVersion), strprintf("rejected nVersion=0x%08x block", block.nVersion));
+        	return error("%s: Reject Old nVersion After Fork: %s, %s", __func__, hash.ToString(), FormatStateMessage(state));
+        }
+
         if (pindexPrev->nStatus & BLOCK_FAILED_MASK)
             return state.DoS(100, error("%s: prev block invalid", __func__), REJECT_INVALID, "bad-prevblk");
 
